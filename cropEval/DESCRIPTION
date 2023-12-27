@@ -1,0 +1,18 @@
+Package: cropEval
+Type: Package
+Title: Qingyuan Genetic Evaluation software(Breeders aid decision making tool)
+Version: 0.1.2
+Date: 08-07-2022
+Author: Li YongJun, Yang Zhenyu, Chen Shan, Xu Pengcheng
+Maintainer: The package maintainer <yourself@somewhere.net>
+Depends: R(>= 3.6.0), tidyr, dplyr, DT, ggplot2, tidyverse, biosim, reshape2, asreml, methods, stats, utils
+Description: More about what it does (maybe more than one line)
+    Use four spaces when indenting paragraphs within the Description.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.2.3
+Suggests: 
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr

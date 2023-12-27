@@ -1,0 +1,356 @@
+---
+title: "TC1育种值估计 - YLD"
+author: "李永军"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: no
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: yes
+    latex_engine: pdflatex
+    number_sections: yes
+    toc: yes
+documentclass: article
+classoption: a4paper
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+extracting <- function(asr,var,individual,term,gxe=FALSE) {
+    ebv <- summary(asr,coef=T)$coef.random
+    ebv <- as.data.frame(ebv)
+    bvalue <- as.data.frame(ebv[grepl(term,row.names(ebv)),])
+    
+    head(bvalue)
+    dim(bvalue)
+    bvalue$id <- 0
+    for (i in 1:dim(bvalue)[1]){
+        s <- strsplit(row.names(bvalue)[i],"[_]")[[1]]
+        if (gxe){
+            bvalue$id[i] <- s[3]
+        } else {
+            bvalue$id[i] <- s[2]        
+        }
+    }
+    v <- (1-bvalue$'std.error'^2/var)
+    bvalue$rel <- ifelse(v<=0,0,v)
+    bvalue$acc <- sqrt(bvalue$rel)
+    
+    bvalue <- bvalue[bvalue$id %in% individual,]
+    bvalue <- bvalue[,c(4,1,2,5,6)]
+    row.names(bvalue) <- seq(1:nrow(bvalue))
+    names(bvalue) <- c("ID","EBV","se","rel","acc")
+    print(head(bvalue))
+
+    return(bvalue)
+    
+}
+```
+
+```{r data, echo=TRUE,message=FALSE,warning=FALSE,include=FALSE}
+
+library(readxl)
+library(writexl)
+library(biosim)
+library(tidyverse)
+library(reshape2)
+library(stringi) 
+library(asreml)
+library(openxlsx)
+library(ggplot2)
+
+library(biosim)
+library(matrixcalc)
+library(asreml)
+library(MCMCglmm)
+library(ggpmisc)
+library(kableExtra)
+
+pedfile <- 'F:/projects/geneticAnalysis/datafiles/TC1_ped.xlsx'
+ped <- data.frame(read_excel(pedfile,sheet = 1))
+names(ped) <- c('ID','Sire','Dam')
+ped$ID <- toupper(ped$ID)
+ped$Sire <- toupper(ped$Sire)
+ped$Dam <- toupper(ped$Dam)
+
+ped <- ped[!(ped$ID=='22TC1XM13626' & ped$Sire=='0'),]
+ped$Sire[ped$ID=='22TC1XM13626'] <- '0'
+ped[ped$ID=='22TC1XM13626',]
+ainv <- ainverse(ped)
+saveRDS(ainv,   'F:/projects/geneticAnalysis/Output/ainverse_TC1.rds')
+ainv <- readRDS('F:/projects/geneticAnalysis/Output/ainverse_TC1.rds')
+parents <- data.frame(read_excel('F:\\projects\\pedReconst\\output\\TC1_parents.xlsx',sheet = 1))
+control <- parents[is.na(parents$FGenoID),]
+newcol <- stringsplit(control$GenoID,'/')
+control$FGenoID <- newcol$X1
+control$MGenoID <- newcol$X2
+# control
+parents$FGenoID[parents$name=='DH605'] <- control$FGenoID[control$name=='DH605']
+parents$MGenoID[parents$name=='DH605'] <- control$MGenoID[control$name=='DH605']
+parents$FGenoID[parents$name=='DK159'] <- control$FGenoID[control$name=='DK159']
+parents$MGenoID[parents$name=='DK159'] <- control$MGenoID[control$name=='DK159']
+parents$FGenoID[parents$name=='XY335'] <- control$FGenoID[control$name=='XY335']
+parents$MGenoID[parents$name=='XY335'] <- control$MGenoID[control$name=='XY335']
+parents$FGenoID[parents$name=='ZD958'] <- control$FGenoID[control$name=='ZD958']
+parents$MGenoID[parents$name=='ZD958'] <- control$MGenoID[control$name=='ZD958']
+parents <- parents[parents$name!='Filler',]
+
+traits <- c('MST','TWT','YLD','PHT','EHT','NCLB','GLS') #,'PMD','PMD%','LDG','LDG%'
+
+trait <- 'YLD'
+
+bluelist <- readRDS('F:/projects/geneticAnalysis/Output/blue_TC1.rds')
+
+blue <- bluelist[[trait]]
+
+blue$Field <- as.factor(blue$Field)
+blue$LF <- paste0(blue$Location,'_',blue$Field)
+blue$LF <- as.factor(blue$LF)
+blue$Name <- toupper(blue$Name)
+blue$Name <- as.factor(blue$Name)
+blue$site <- ifelse(blue$Location %in% c("6JLGZL","7LNHC","7LNTL"),
+                    'Spring','Summer')
+blue$site <- factor(blue$site)
+blue <- blue[order(blue$site),]
+
+filename <- 'F:/projects/geneticAnalysis/datafiles/22TC1.xlsx'
+sheets <- c('TC1-yld-HC')
+
+vartype <- c('numeric','text',rep('numeric',5),rep('text',8),
+             rep('numeric',8))
+yld <- data.frame(read_excel(filename,sheet = sheets[1],col_type=vartype))
+yld <- yld[,1:21]
+yld$Location <- factor(yld$Location)
+yld$Range <- factor(yld$Range)
+yld$Pass <- factor(yld$Pass)
+yld$FGenoID <- factor(toupper(yld$FGenoID))
+yld$MGenoID <- factor(toupper(yld$MGenoID))
+yld$LF <- paste0(yld$Location,'_',yld$Field)
+yld$LF <- factor(yld$LF)
+
+
+```
+
+```{r model6, echo=TRUE,message=FALSE,warning=FALSE,include=TRUE}
+
+
+asr <- asreml(predicted.value ~ LF,
+               random = ~ vm(Name,ainv), 
+                   residual = ~idv(units),
+               data = blue)
+
+summary(asr)$varcomp
+va <- summary(asr)$varcomp$component[2]
+ 
+h2 <- vpredict(asr,h2~(V1)/(V1+V2))
+print(h2)
+fgenoid <- unique(parents$FGenoID)
+febv <- extracting(asr,var=va,individual = fgenoid,term='vm(Name, ainv)*')
+febv <- febv[order(-febv$EBV),]
+febv$par <- 'SS'
+
+mgenoid <- unique(parents$MGenoID)
+mebv <- extracting(asr,var=va,individual = mgenoid,term='vm(Name, ainv)*')
+mebv <- mebv[order(-mebv$EBV),]
+mebv$par <- 'NS'
+
+ebv6 <- rbind(febv,mebv)    
+write.xlsx(ebv6,file = paste0('Output/parentalEBV_',trait,'.xlsx'))
+feff <- data.frame(asr$coefficients$fixed)
+newcol <- stringsplit(row.names(feff),'_')
+feff$Location <- newcol$X2
+feff$Field <- newcol$X3
+
+feff6=feff
+
+
+```
+
+```{r model7, echo=TRUE,message=FALSE,warning=FALSE,include=TRUE}
+
+mgxe <- asreml(predicted.value~LF+site,
+              random = ~us(site):vm(Name,ainv),
+              residual = ~dsum(~id(units)|site),
+              data = blue)
+summary(mgxe)$varcomp
+va <- summary(mgxe)$varcomp
+
+rg <- vpredict(mgxe,rg ~ V2/sqrt(V1*V3))
+h2sp <- vpredict(mgxe,h2~V1/(V1+V4))
+h2su <- vpredict(mgxe,h2~V3/(V3+V5))
+h2sp$season <- 'Spring'
+h2su$season <- 'Summer'
+h2 <- rbind(h2sp,h2su)
+h2
+rg
+
+fgenoid <- unique(parents$FGenoID)
+febvs <- extracting(asr=mgxe,var=va$component[1],individual = fgenoid,term='Spring:vm(Name, ainv)*',gxe=TRUE)
+febvs <- febvs[order(-febvs$EBV),]
+febvs$par <- 'SS'
+febvs$season <- 'Spring'
+febvsu <- extracting(asr=mgxe,var=va$component[3],individual = fgenoid,term='Summer:vm(Name, ainv)*',gxe=TRUE)
+febvsu <- febvsu[order(-febvsu$EBV),]
+febvsu$par <- 'SS'
+febvsu$season <- 'Summer'
+
+mgenoid <- unique(parents$MGenoID)
+mebvs <- extracting(asr=mgxe,var=va$component[1],individual = mgenoid,term='Spring:vm(Name, ainv)*',gxe=TRUE)
+mebvs <- mebvs[order(-mebv$EBV),]
+mebvs$par <- 'NS'
+mebvs$season <- 'Spring'
+mebvsu <- extracting(asr=mgxe,var=va$component[3],individual = mgenoid,term='Summer:vm(Name, ainv)*',gxe=TRUE)
+mebvsu <- mebvsu[order(-mebvsu$EBV),]
+mebvsu$par <- 'NS'
+mebvsu$season <- 'Summer'
+
+
+ebv7 <- rbind(febvs,mebvs,febvsu,mebvsu)    
+for (i in 1:nrow(ebv7)){
+    ebv7$group[i] <- ifelse(stri_count(ebv7$ID[i],regex="!")==1,'DH',
+                          ifelse(stri_count(ebv7$ID[i],regex="B")==1,'SELF','W'))
+}
+write.xlsx(ebv7,file = paste0('F:/projects/geneticAnalysis/Output/EBV_all_',trait,'_GxE.xlsx'))
+ebv7 <- ebv7[ebv7$group!='W',]
+
+bvalue <- dcast(ebv7,formula = ID+par+group~season,value.var = 'EBV')
+bvalue <- merge(bvalue,ebv6[,1:2],by='ID')
+
+```
+
+```{r realdata,echo=FALSE,message=FALSE,warning=FALSE,include=FALSE}
+
+# No of obs ---------------------------------------------------------------
+
+nobss <- data.frame(table(yld$FGenoID[!is.na(yld$YLD)]))
+nobns <- data.frame(table(yld$MGenoID[!is.na(yld$YLD)]))
+names(nobss) <- c('Level','Nobs')
+names(nobns) <- c('Level','Nobs')
+
+exfile <- 'F:/projects/geneticAnalysis/datafiles/22-TC1advanced.xlsx'
+ss <- data.frame(read_excel(exfile,sheet = 'SS'))
+ss$Level <- toupper(ss$Level)
+names(ss)[names(ss)=='Yld'] <- 'YLD'
+ss <- ss[,c('Level','ADV',trait)]
+ss <- merge(ss,bvalue,by.x = 'Level',by.y = 'ID',all.x = T)
+ss <- ss[order(-ss[[trait]]),]
+ss <- ss[ss$Level!='22TC1XM13626',]
+ss <- merge(ss,nobss,by='Level')
+ss$par <- 'SS'
+
+ss <- ss[order(-ss$Spring),]
+ss$spSel <- c(rep(1,319),rep(2,nrow(ss)-319))
+ss <- ss[order(-ss$Summer),]
+ss$suSel <- c(rep(1,319),rep(2,nrow(ss)-319))
+ss$sel <- ifelse(ss$spSel==1,ifelse(ss$suSel==1,1,2),ifelse(ss$suSel==1,3,4))
+ss <- ss[order(-ss$EBV),]
+ss$Selall <- c(rep(1,319),rep(2,nrow(ss)-319))
+
+
+ns <- data.frame(read_excel(exfile,sheet = 'NS'))
+ns$Level <- toupper(ns$Level)
+names(ns)[names(ns)=='Yld'] <- 'YLD'
+ns <- ns[,c('Level','ADV',trait)]
+ns <- merge(ns,bvalue,by.x = 'Level',by.y = 'ID',all.x = T)
+ns <- ns[order(-ns[[trait]]),]
+ns <- merge(ns,nobns,by='Level')
+ns$par <- 'NS'
+ns <- ns[order(-ns$Spring),]
+ns$spSel <- c(rep(1,269),rep(2,nrow(ns)-269))
+ns <- ns[order(-ns$Summer),]
+ns$suSel <- c(rep(1,269),rep(2,nrow(ns)-269))
+ns$sel <- ifelse(ns$spSel==1,ifelse(ns$suSel==1,1,2),ifelse(ns$suSel==1,3,4))
+ns <- ns[order(-ns$EBV),]
+ns$Selall <- c(rep(1,269),rep(2,nrow(ns)-269))
+
+par <- rbind(ns,ss)
+write.xlsx(par,file = paste0('F:/projects/geneticAnalysis/Output/parentalEBV_models_GxE',trait,'.xlsx'))
+
+my.formula <- y ~ x
+par$ADV <- factor(par$ADV)
+par$ADV <- ifelse(is.na(par$ADV),'Unselected','Advanced')
+
+
+```
+
+# Plotting
+
+```{r plotting, echo=FALSE,message=FALSE,warning=FALSE}
+ggplot(par,aes(x=YLD, y=EBV)) +
+    geom_point(aes(colour=ADV)) +
+    geom_smooth(formula = y ~ x, method='lm',se=FALSE) + #layer 2
+    ggtitle('Non-GxE模型') +
+    scale_colour_hue(name="统计模型",labels=levels(par$ADV),l=40) +
+    stat_poly_eq(formula = my.formula, 
+                 aes(label = paste( ..eq.label..,..rr.label.., sep = "~~~")), 
+                 parse = TRUE) +         
+    labs(y="non-GxE EBV",
+         x="BV used in 2022 selection") + # add axis lables and plot title.
+    facet_wrap(.~par,scales = 'free') +
+    theme(plot.title=element_text(size=15, face="bold"),
+          axis.text.x=element_text(size=8),
+          axis.text.y=element_text(size=8),
+          axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10),
+          legend.position = 'none')
+
+par$sel <- factor(par$sel)
+par$Selall <- factor(par$Selall)
+ggplot(par,aes(x=Spring, y=Summer)) +
+    geom_point(aes(colour=sel)) +
+    geom_smooth(formula = y ~ x, method='lm',se=FALSE) + #layer 2
+    ggtitle('GxE模型') +
+    scale_colour_hue(name="统计模型",labels=levels(par$sel),l=40) +
+    stat_poly_eq(formula = my.formula, 
+                 aes(label = paste( ..eq.label..,..rr.label.., sep = "~~~")), 
+                 parse = TRUE) +         
+    labs(y="EBV of Summer breeds",
+         x="EBV of Spring breeds") + # add axis lables and plot title.
+    facet_wrap(.~par,scales = 'free') +
+    theme(plot.title=element_text(size=15, face="bold"),
+          axis.text.x=element_text(size=8),
+          axis.text.y=element_text(size=8),
+          axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10),
+          legend.position = 'none')
+
+
+ggplot(par,aes(x=EBV, y=Summer)) +
+    geom_point(aes(colour=Selall)) +
+    geom_smooth(formula = y ~ x, method='lm',se=FALSE) + #layer 2
+    ggtitle('Summer breeds') +
+    scale_colour_hue(name="统计模型",labels=levels(par$sel),l=40) +
+    stat_poly_eq(formula = my.formula, 
+                 aes(label = paste( ..eq.label..,..rr.label.., sep = "~~~")), 
+                 parse = TRUE) +         
+    labs(y="GxE model",
+         x="Non-GxE model") + # add axis lables and plot title.
+    facet_wrap(.~par,scales = 'free') +
+    theme(plot.title=element_text(size=15, face="bold"),
+          axis.text.x=element_text(size=8),
+          axis.text.y=element_text(size=8),
+          axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10),
+          legend.position = 'none')
+ggplot(par,aes(x=EBV, y=Spring)) +
+    geom_point(aes(colour=Selall)) +
+    geom_smooth(formula = y ~ x, method='lm',se=FALSE) + #layer 2
+    ggtitle('Spring breeds') +
+    scale_colour_hue(name="统计模型",labels=levels(par$sel),l=40) +
+    stat_poly_eq(formula = my.formula, 
+                 aes(label = paste( ..eq.label..,..rr.label.., sep = "~~~")), 
+                 parse = TRUE) +         
+    labs(y="GxE model",
+         x="Non-GxE model") + # add axis lables and plot title.
+    facet_wrap(.~par,scales = 'free') +
+    theme(plot.title=element_text(size=15, face="bold"),
+          axis.text.x=element_text(size=8),
+          axis.text.y=element_text(size=8),
+          axis.title.x=element_text(size=10),
+          axis.title.y=element_text(size=10),
+          legend.position = 'none')
+
+```
+
